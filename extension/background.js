@@ -469,7 +469,7 @@ if (!aiResult) {
     return
   }
 
-  const { replyMessage, status, reason } = aiResult
+  const { replyMessage, status, reason, matchedJobId } = aiResult
   console.log(`WA Bot BG: ✅ AI responded — status="${status}" | reason="${reason}"`)
   console.log(`WA Bot BG: replyMessage="${replyMessage}"`)
 
@@ -584,7 +584,8 @@ async function callAI(provider, geminiKey, groqKey, activeJobs, tallyLink, histo
 function buildSystemPrompt(activeJobs) {
   // Turn the Supabase array into a context the AI understands
   const jobsContext = activeJobs.map(job => `
-    ROLE: ${job.title}
+     ROLE_ID: ${job.id}
+      ROLE: ${job.title}
     LOCATION: ${job.locations.join(', ')}
     REQUIREMENTS: ${job.requirements.join(', ')}
     DISQUALIFIERS: ${job.disqualifiers.join(', ')}
@@ -603,7 +604,10 @@ function buildSystemPrompt(activeJobs) {
   3. Once a role is picked, screen them strictly based on the REQUIREMENTS and DISQUALIFIERS for that specific job.
   4. Ask ONE question at a time.
   5. If they qualify, give them the specific OUTCOME instructions for that job.
-  6. Return ONLY valid JSON: {"replyMessage": "...", "status": "screening|qualified|rejected|needs_owner", "reason": "..."}`;
+   6. Once you know which role the candidate means, include that role's ROLE_ID
+         as "matchedJobId" in your response. If no role has been picked yet, set
+         "matchedJobId" to null.
+      7. Return ONLY valid JSON: {"replyMessage": "...", "status": "...", "reason": "...", "matchedJobId": "..."}`;
 }
 // ─── CLAUDE ───────────────────────────────────────────────────
 async function callClaude(apiKey, model, systemPrompt, history) {
