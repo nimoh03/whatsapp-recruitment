@@ -335,10 +335,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true
 })
 
-async function handleNewMessage({ messageId, sender, text }) {
+ async function handleNewMessage({ messageId, sender, text }) {
   console.log(`WA Bot BG: ── NEW_MESSAGE ──────────────────────`)
   console.log(`WA Bot BG: sender="${sender}" | messageId="${messageId}"`)
   console.log(`WA Bot BG: text="${text}"`)
+
+    const localSettings = await chrome.storage.local.get(['isActive', 'sessionResetDays'])
+        if (!localSettings.isActive) {
+          console.log('WA Bot BG: Bot is deactivated in the sidepanel — skipping')
+          return
+        }
 
   // Dedup guard
 if (lastProcessedId[sender] === messageId) {
@@ -409,12 +415,7 @@ if (activeJobs.length === 0 || !geminiKey) {
   if (!conversations[sender]) {
     console.log(`WA Bot BG: 🆕 New sender — running intent check for ${sender}`)
 
-   const isJobRelated = await checkIntent(
-      settings.geminiKey,
-      settings.groqKey,
-      settings.briefing,
-      text
-    )
+   const isJobRelated = await checkIntent(geminiKey, groqKey, combinedBriefing, text)
 
     if (!isJobRelated) {
       console.log(`WA Bot BG: ⏭ Intent check failed — not job-related, pinging owner`)

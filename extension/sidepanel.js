@@ -419,7 +419,7 @@ document.getElementById('activateBtn').addEventListener('click', async () => {
     return
   }
 
-  await chrome.storage.local.set({ briefing, tallyLink, isActive: true })
+await chrome.storage.local.set({ isActive: true })
   setBotActive(true)
   document.getElementById('briefingHint').textContent = '✓ Bot is live. Screening candidates automatically.'
   document.getElementById('briefingHint').style.color = 'var(--accent)'
@@ -756,4 +756,4 @@ const list = document.getElementById('catchupCandidateList')
 
 // ─── START ────────────────────────────────────────────────────
 loadSettings()
-checkOnboarding()
+// checkOnboarding()
