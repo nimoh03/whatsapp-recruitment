@@ -10,70 +10,20 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-
-  <!-- ═══ NETWORK BANNER ═══════════════════════════════════════ -->
   <div class="network-banner hidden" id="networkBanner">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
       <path d="M1 1l22 22M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.56 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
     </svg>
-    <span id="networkBannerText">No internet connection — messages will retry when back online</span>
+    <span id="networkBannerText">No internet connection � actions will retry when back online</span>
   </div>
 
-  <!-- ═══ ONBOARDING ════════════════════════════════════════════ -->
-  <div class="onboarding-overlay hidden" id="onboardingOverlay">
-    <div class="onboarding-card">
-      <div class="onboarding-logo">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-          <path d="M21 6.5l-3-3-1.5 1.5L18 6.5 12 12.5 8.5 9 4 13.5l1.5 1.5L8.5 12.5l3.5 3.5 6-6 1.5 1.5L21 9.5V6.5z" fill="currentColor"/>
-        </svg>
-      </div>
-      <h2>Welcome to WA Recruit</h2>
-      <p>Your AI recruitment assistant. Set up in 3 steps.</p>
-
-      <!-- Step 1 -->
-      <div class="onboarding-step active" id="step1">
-        <div class="step-number">1 of 3</div>
-        <h3>Paste your Gemini API Key</h3>
-        <p>Get a free key at <strong>aistudio.google.com</strong> → Get API Key</p>
-        <input type="password" id="onboardGeminiKey" class="field-input" placeholder="Paste your Gemini API key here" />
-        <button class="btn-activate" id="onboardStep1Btn">Continue →</button>
-      </div>
-
-      <!-- Step 2 -->
-      <div class="onboarding-step hidden" id="step2">
-        <div class="step-number">2 of 3</div>
-        <h3>Describe the job</h3>
-        <p>Tell the AI what you're hiring for and what to screen for.</p>
-        <textarea id="onboardBriefing" class="field-textarea" rows="5"
-          placeholder="Example: Hiring delivery riders in Lagos.
-Requirements:
-- Must own a motorcycle
-- Available 8am–6pm
-- Min 1 year experience"></textarea>
-        <button class="btn-activate" id="onboardStep2Btn">Continue →</button>
-        <button class="btn-ghost" style="margin-top:8px" id="onboardBack1Btn">← Back</button>
-      </div>
-
-      <!-- Step 3 -->
-      <div class="onboarding-step hidden" id="step3">
-        <div class="step-number">3 of 3</div>
-        <h3>You're ready!</h3>
-        <p>Click Activate to start screening candidates automatically.</p>
-        <div class="onboarding-checklist">
-          <div class="check-item">✓ API key saved</div>
-          <div class="check-item">✓ Job briefing saved</div>
-          <div class="check-item">✓ WhatsApp Web open</div>
-        </div>
-        <button class="btn-activate" id="onboardActivateBtn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>
-          Activate Bot
-        </button>
-        <button class="btn-ghost" style="margin-top:8px" id="onboardBack2Btn">← Back</button>
-      </div>
-    </div>
+  <div class="network-banner hidden" id="keyBanner">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+      <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    <span id="keyBannerText">No API keys saved — open Dashboard → Bot Settings to add Gemini/Groq keys.</span>
   </div>
 
-  <!-- ═══ HEADER ═══════════════════════════════════════════════ -->
   <div class="header">
     <div class="header-brand">
       <div class="header-logo">
@@ -89,111 +39,17 @@ Requirements:
     </div>
   </div>
 
-  <!-- ═══ STATS BAR ════════════════════════════════════════════ -->
-  <div class="stats-bar" id="statsBar">
-    <div class="stat-item">
-      <span class="stat-num" id="statScreening">0</span>
-      <span class="stat-label">Screening</span>
-    </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-num stat-green" id="statQualified">0</span>
-      <span class="stat-label">Qualified</span>
-    </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-num stat-red" id="statRejected">0</span>
-      <span class="stat-label">Rejected</span>
-    </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-num stat-amber" id="statAttention">0</span>
-      <span class="stat-label">Needs You</span>
-    </div>
-  </div>
-
-  <!-- ═══ TABS ══════════════════════════════════════════════════ -->
   <div class="tabs">
-    <button class="tab active" data-tab="briefing">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Briefing
-    </button>
-    <button class="tab" data-tab="chats">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Live Chats
-      <span class="tab-badge hidden" id="attentionBadge">!</span>
-    </button>
-    <button class="tab" data-tab="catchup">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M1 4v6h6M23 20v-6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Catch-Up
-    </button>
-    <button class="tab" data-tab="settings">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="2"/></svg>
-      Settings
-    </button>
+    <button class="tab active" data-tab="activate">Activate</button>
+    <button class="tab" data-tab="catchup">Catch-Up</button>
   </div>
 
-  <!-- ═══ TAB 1: BRIEFING ══════════════════════════════════════ -->
-  <div class="tab-content active" id="tab-briefing">
-
+  <div class="tab-content active" id="tab-activate">
     <div class="field-group">
-      <label class="field-label">Job Title</label>
-      <input type="text" id="jobTitleInput" class="field-input" placeholder="e.g. Delivery Rider, Sales Rep, Driver" />
+      <label class="field-label">Bot status</label>
+      <p class="field-hint" id="statusHint">Activate the bot to begin screening candidates on WhatsApp.</p>
     </div>
-
-    <div class="field-group">
-      <label class="field-label">Location Required</label>
-      <input type="text" id="jobLocationInput" class="field-input" placeholder="e.g. Lagos Island only, Must be in Abuja" />
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Screening Requirements</label>
-      <div id="requirementsList" class="requirements-list"></div>
-      <button class="btn-add-req" id="addRequirementBtn">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        Add Requirement
-      </button>
-      <span class="field-hint">Add each requirement separately. Bot will screen in this order.</span>
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Disqualify if <span class="field-optional">optional</span></label>
-      <input type="text" id="disqualifyInput" class="field-input" placeholder="e.g. No motorcycle, Outside Lagos, Under 18" />
-      <span class="field-hint">Hard dealbreakers — bot rejects immediately if candidate fails these.</span>
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Application Form Link <span class="field-optional">optional</span></label>
-      <input type="url" id="tallyInput" class="field-input" placeholder="https://tally.so/r/yourform" />
-    </div>
-
-   <!-- Paste-to-fill -->
-    <div class="paste-expand" id="pasteExpand">
-      <button class="btn-paste-toggle" id="pasteToggleBtn">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        Paste job description to auto-fill
-      </button>
-      <div class="paste-area hidden" id="pasteArea">
-        <textarea id="pasteInput" class="field-textarea" rows="5"
-          placeholder="Paste your full job description here. Example:
-
-We are hiring delivery riders in Lagos Island only.
-Candidates must own a working motorcycle.
-Minimum 2 years delivery experience required.
-Must be available Monday to Saturday, 8am to 6pm.
-Reject anyone without a bike or outside Lagos."></textarea>
-        <div class="paste-actions">
-          <button class="btn-activate" id="parseDescBtn">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 2v7h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            Parse & Fill Fields
-          </button>
-          <button class="btn-ghost" id="parseCancelBtn">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    
-    <div class="action-row">
+    <div class="action-row" style="gap: 10px; flex-wrap: wrap;">
       <button class="btn-activate" id="activateBtn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>
         Activate Bot
@@ -203,42 +59,8 @@ Reject anyone without a bike or outside Lagos."></textarea>
         Deactivate
       </button>
     </div>
-
-    <p class="field-hint" id="briefingHint"></p>
   </div>
 
-  <!-- ═══ TAB 2: LIVE CHATS ════════════════════════════════════ -->
-  <div class="tab-content hidden" id="tab-chats">
-
-    <div class="chats-header">
-      <span class="chats-title">Active Conversations</span>
-      <span class="chats-live-dot"></span>
-    </div>
-
-    <!-- Conversation viewer -->
-    <div class="convo-viewer hidden" id="convoViewer">
-      <div class="convo-viewer-header">
-        <button class="btn-back" id="convoBackBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19 12H5M12 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <span class="convo-viewer-name" id="convoViewerName"></span>
-        <span class="convo-viewer-status" id="convoViewerStatus"></span>
-      </div>
-      <div class="convo-messages" id="convoMessages"></div>
-    </div>
-
-    <div id="chatsList">
-      <div class="empty-state">
-        <div class="empty-icon">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </div>
-        <p>No conversations yet</p>
-        <span>Activate the bot and candidates will appear here in real time</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ TAB 3: CATCH-UP ══════════════════════════════════════ -->
   <div class="tab-content hidden" id="tab-catchup">
     <div id="catchupSetup">
       <div class="catchup-hero">
@@ -246,7 +68,7 @@ Reject anyone without a bike or outside Lagos."></textarea>
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M1 4v6h6M23 20v-6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </div>
         <h3>Catch-Up Mode</h3>
-        <p>Reply to candidates who messaged before you installed the bot. The AI will work through old conversations automatically.</p>
+        <p>Scan WhatsApp for unanswered chats and let the bot reply to old candidates automatically.</p>
       </div>
       <div class="field-group">
         <label class="field-label">How far back should we look?</label>
@@ -255,7 +77,7 @@ Reject anyone without a bike or outside Lagos."></textarea>
           <button class="day-btn" data-days="7">7 days</button>
           <button class="day-btn" data-days="14">14 days</button>
         </div>
-        <p class="field-hint">Only unanswered messages from unknown contacts within this window will be picked up.</p>
+        <p class="field-hint">Only unanswered messages from unknown contacts within this window will be evaluated.</p>
       </div>
       <button class="btn-catchup-scan" id="catchupScanBtn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -299,75 +121,12 @@ Reject anyone without a bike or outside Lagos."></textarea>
     </div>
     <div id="catchupDone" class="hidden">
       <div class="catchup-done-wrap">
-        <div class="catchup-done-icon">✓</div>
+        <div class="catchup-done-icon">?</div>
         <h3>Catch-Up Complete</h3>
         <p>All unanswered candidates have been responded to. Switching to live mode.</p>
         <button class="btn-ghost" id="catchupResetBtn">Run Another Scan</button>
       </div>
     </div>
-  </div>
-
-  <!-- ═══ TAB 4: SETTINGS ══════════════════════════════════════ -->
-  <div class="tab-content hidden" id="tab-settings">
-    <div class="settings-section">
-      <div class="settings-section-title">AI Keys</div>
-      <div class="field-group">
-        <label class="field-label">Gemini API Key</label>
-        <input type="password" id="geminiKeyInput" class="field-input" placeholder="Paste Gemini key — aistudio.google.com" />
-        <span class="field-hint">Free at aistudio.google.com → Get API Key</span>
-      </div>
-      <div class="field-group">
-        <label class="field-label">Groq API Key <span class="field-optional">optional</span></label>
-        <input type="password" id="groqKeyInput" class="field-input" placeholder="Paste Groq key — console.groq.com" />
-        <span class="field-hint">Free at console.groq.com → API Keys. Adds 14,000 more daily requests.</span>
-      </div>
-      <button class="btn-test-key" id="testKeyBtn">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        Test API Key
-      </button>
-      <p class="test-key-result hidden" id="testKeyResult"></p>
-      <div class="usage-bar-wrap" id="usageBarWrap">
-        <div class="usage-bar-label">
-          <span>Daily usage</span>
-          <span id="usageCount">0 requests used</span>
-        </div>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" id="usageBar" style="width: 0%"></div>
-        </div>
-        <span class="field-hint">Resets at midnight. ~15,500 requests available daily.</span>
-      </div>
-    </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Screening</div>
-      <div class="field-group">
-        <label class="field-label">Trigger Keywords</label>
-        <input type="text" id="keywordsInput" class="field-input" placeholder="hello, hi, hey, applying, job" />
-        <span class="field-hint">Bot only responds when message contains one of these words.</span>
-      </div>
-    </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Safety</div>
-      <div class="field-group">
-        <label class="field-label">Session Reset After</label>
-        <div class="day-picker">
-          <button class="day-btn active" data-reset="7">7 days</button>
-          <button class="day-btn" data-reset="14">14 days</button>
-        </div>
-        <span class="field-hint">If a candidate recontacts after this period, they start fresh.</span>
-      </div>
-      <div class="toggle-card">
-        <div class="toggle-card-info">
-          <span class="toggle-card-title">Unknown contacts only</span>
-          <span class="toggle-card-desc">Skip saved contacts (friends, family). Only screen unsaved numbers.</span>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="unknownOnlyToggle" checked />
-          <span class="slider"></span>
-        </label>
-      </div>
-    </div>
-    <button class="btn-save" id="saveSettingsBtn">Save Settings</button>
-    <p class="save-success hidden" id="saveSuccess">✓ Settings saved</p>
   </div>
 
   <script src="sidepanel.js"></script>

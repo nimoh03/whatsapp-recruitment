@@ -2,7 +2,7 @@
 let processedMessages = new Set()
 let scanInterval = null
 let botRunning = false
-// Tracks senders who are mid-conversation — bypasses keyword gate for them.
+// Tracks senders who are mid-conversation.
 // Persists in memory for the session; doesn't rely on DOM state.
 let ongoingInterviews = new Set()
 
@@ -255,21 +255,7 @@ if (!acquireLock(lockKey)) {
   return
 }
 
-const { unknownOnlyMode } = await chrome.storage.local.get(['unknownOnlyMode'])
-if (unknownOnlyMode !== false) {
-  const looksLikePhone = /^[+\d][\d\s\-().]{4,}$/.test(lockKey)
-  if (!looksLikePhone) {
-    console.log(`WA Bot: ⏭ "${lockKey}" looks like a saved contact (has name not number) — skipping`)
-    releaseLock()
-    return
-  }
-}
 
-console.log(`WA Bot: 🔴 Found unread for "${lockKey}" — clicking...`)
-
-simulateClick(unreadChat)
-
-  // Give WhatsApp 2.5s to open the chat and render messages
   setTimeout(() => processOpenChat(lockKey), 2500)
 }
 
@@ -305,24 +291,16 @@ function findFirstUnreadChat() {
   const rows = Array.from(chatList.querySelectorAll('[role="row"], [role="listitem"]'))
   console.log(`WA Bot: Found ${rows.length} chat rows`)
 
-  // Get unknownOnlyMode from storage synchronously via cached value
-  // We pre-filter here to avoid locking on saved contacts at all
   for (const row of rows) {
     const rowText = row.innerText || ''
     if (rowText.toLowerCase().includes('archived')) continue
     if (!hasUnreadBadge(row)) continue
 
-    // Pre-check: if unknownOnlyMode is on (default), skip rows that
-    // look like saved contacts right here before acquiring any lock.
-    // This prevents "Lucky" from blocking every scan cycle.
     const senderName = getSenderNameFromRow(row)
     if (senderName) {
       const looksLikePhone = /^[+\d][\d\s\-().]{4,}$/.test(senderName)
-      // If it doesn't look like a phone number it's a saved contact — skip
-      // We read unknownOnlyMode from storage below, but default is true
-      // so we pre-filter here. The full check still happens in processOpenChat.
       if (!looksLikePhone) {
-        console.log(`WA Bot: ⏭ Pre-filter skipping saved contact "${senderName}"`)
+        console.log(`WA Bot: ⏭ Skipping saved contact row "${senderName}"`)
         continue
       }
     }
@@ -376,60 +354,24 @@ function hasUnreadBadge(row) {
   return false
 }
 
-// ─── SAVED CONTACT DETECTION ──────────────────────────────────
-// Saved contacts render their name with dir="auto" in the header.
-// Unsaved numbers render as raw phone digits with dir="ltr".
-// If the header shows dir="auto" AND it doesn't look like a phone number,
-// it's a saved contact — skip it when unknown-only mode is on.
-function isSavedContact() {
-  const header = document.querySelector('header')
-  if (!header) return false
-
-  const autoSpan = header.querySelector(
-    '[data-testid="conversation-info-header-chat-title"] span[dir="auto"]'
-  ) || header.querySelector('span[dir="auto"]')
-
-  if (!autoSpan) return false
-
-  const name = autoSpan.innerText?.trim()
-  if (!name) return false
-
-  // If it looks like a phone number, it's unsaved
-  const looksLikePhone = /^[+\d][\d\s\-().]{4,}$/.test(name)
-  if (looksLikePhone) return false
-
-  // Has a real name — saved contact
-  return true
-}
-
 // ─── PROCESS THE CURRENTLY OPEN CHAT ─────────────────────────
 async function processOpenChat(lockKey) {
   console.log(`WA Bot: Processing open chat (lock: "${lockKey}")`)
 
   try {
-   const { isActive, triggerKeywords, unknownOnlyMode } = await chrome.storage.local.get([
-  'isActive', 'triggerKeywords', 'unknownOnlyMode'
-])
+    const { isActive } = await chrome.storage.local.get(['isActive'])
 
-if (!isActive) {
-  releaseLock()
-  return
-}
+    if (!isActive) {
+      releaseLock()
+      return
+    }
 
-if (unknownOnlyMode !== false) {
-  const isSaved = isSavedContact()
-  if (isSaved) {
-    console.log(`WA Bot: ⏭ Saved contact — skipping (unknown-only mode)`)
-    releaseLock()
-    return
-  }
-}
     if (pendingReplies.has(lockKey)) {
-  console.log(`WA Bot: Reply already pending for "${lockKey}" — releasing`)
-  releaseLock()
-  return
-}
-const sender = getSenderName(lockKey)
+      console.log(`WA Bot: Reply already pending for "${lockKey}" — releasing`)
+      releaseLock()
+      return
+    }
+    const sender = getSenderName(lockKey)
     if (!sender) { // Should never happen now — lockKey is always the fallback
       console.log('WA Bot: Could not determine sender name — releasing')
       releaseLock()
@@ -458,20 +400,11 @@ const sender = getSenderName(lockKey)
       return
     }
 
-    // ── KEYWORD GATE ────────────────────────────────────────
-    const keywords = triggerKeywords
-      ? triggerKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
-      : ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening']
-
     const outgoingCount = document.querySelectorAll('.message-out').length
     const conversationOngoing = ongoingInterviews.has(sender) || outgoingCount > 0
 
-    // Check keyword against all new messages combined
-    const combinedForKeyword = newMessages.map(m => m.text).join(' ').toLowerCase()
-    const triggered = keywords.some(k => combinedForKeyword.includes(k))
-
-    if (!triggered && !conversationOngoing) {
-      console.log(`WA Bot: ⏭ No keyword match and not ongoing — releasing`)
+    if (!conversationOngoing && newMessages.length === 0) {
+      console.log(`WA Bot: No new text messages found — releasing`)
       releaseLock()
       return
     }

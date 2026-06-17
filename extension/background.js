@@ -1,74 +1,26 @@
-// ADD THIS AT THE VERY TOP
-const DASHBOARD_DOMAIN = "localhost"; // Change to your actual domain when you deploy
-const SUPABASE_PROJECT_ID = "iwdvkljbvbftbjmzvmqe"; // Your Project ID from the URL you sent
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3ZHZrbGpidmJmdGJqbXp2bXFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MjM4MTcsImV4cCI6MjA5NzE5OTgxN30.QMIdhha3Tn846MFuAhJ1Jtu6O0G04K5l-XvVwTeMWrA"; // Paste your public anon key here
+const DASHBOARD_BASE_URL = 'http://localhost:3000' // Change to your deployed dashboard URL when ready
 
-// THE COOKIE STEALER
-async function getSupabaseSession() {
-  return new Promise((resolve) => {
-    // Lead Dev Fix: We search by DOMAIN "localhost" instead of "http://localhost:3000"
-    chrome.cookies.getAll({ domain: "localhost" }, (cookies) => {
-      
-      console.log("Lead Dev: Found " + (cookies ? cookies.length : 0) + " total localhost cookies.");
+async function fetchDashboardSession() {
+  try {
+    const response = await fetch(`${DASHBOARD_BASE_URL}/api/extension/session`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json',
+      },
+    })
 
-      if (!cookies || cookies.length === 0) {
-        console.warn("Lead Dev: Still no cookies. Trying 127.0.0.1...");
-        // Backup: Try the IP address version of localhost
-        chrome.cookies.getAll({ domain: "127.0.0.1" }, (cookiesIp) => {
-           processCookies(cookiesIp, resolve);
-        });
-        return;
-      }
-
-      processCookies(cookies, resolve);
-    });
-  });
-}
-
-// Helper to keep code clean
-function processCookies(cookies, resolve) {
-  // Only match cookies belonging to OUR Supabase project, e.g.
-  // "sb-iwdvkljbvbftbjmzvmqe-auth-token" or its chunked variants
-  // ("...-auth-token.0", "...-auth-token.1", etc). This avoids
-  // accidentally grabbing stale session cookies from a different
-  // Supabase project also running on localhost.
-  const prefix = `sb-${SUPABASE_PROJECT_ID}-auth-token`;
-  const authCookies = cookies
-    .filter(c => c.name.startsWith(prefix))
-    .sort((a, b) => {
-      const aIdx = parseInt(a.name.split('.').pop(), 10);
-      const bIdx = parseInt(b.name.split('.').pop(), 10);
-      const aNum = isNaN(aIdx) ? -1 : aIdx;
-      const bNum = isNaN(bIdx) ? -1 : bIdx;
-      return aNum - bNum;
-    });
-
-  if (authCookies.length > 0) {
-    try {
-      const rawValue = authCookies.map(c => decodeURIComponent(c.value)).join('');
-
-      let jsonString;
-      if (rawValue.startsWith("base64-")) {
-        jsonString = atob(rawValue.substring(7));
-      } else {
-        jsonString = rawValue;
-      }
-
-      const sessionData = JSON.parse(jsonString);
-      console.log("Lead Dev: ✅ SESSION FOUND!", sessionData.user.email);
-      resolve(sessionData);
-    } catch (e) {
-      console.error("Lead Dev: Failed to parse auth cookie:", e);
-      console.log("Cookie names found:", cookies.map(c => c.name));
-      resolve(null);
+    if (!response.ok) {
+      console.warn('WA Bot BG: Dashboard session fetch failed', response.status)
+      return null
     }
-  } else {
-    console.log("Found names:", cookies.map(c => c.name));
-    resolve(null);
+
+    return await response.json()
+  } catch (error) {
+    console.warn('WA Bot BG: Dashboard session fetch error', error)
+    return null
   }
 }
-// Trigger this check as soon as the background script loads
-getSupabaseSession();
 
 // ─── KEEPALIVE ────────────────────────────────────────────────
 setInterval(() => {
@@ -183,14 +135,8 @@ async function incrementModelCounter(modelId) {
 
 async function getNextFreeModel() {
   const counters = await getModelCounters()
-  const { groqKey } = await chrome.storage.local.get(['groqKey'])
 
   for (const model of FREE_MODELS) {
-    // Skip Groq models if no Groq key provided
-    if (model.provider === 'groq' && !groqKey) {
-      console.log(`WA Bot BG: ⏭ Skipping Groq model "${model.id}" — no Groq key`)
-      continue
-    }
     const used = counters[model.id] || 0
     if (used < model.softCap) {
       console.log(`WA Bot BG: 🎯 Using model "${model.id}" (${used}/${model.softCap})`)
@@ -340,11 +286,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log(`WA Bot BG: sender="${sender}" | messageId="${messageId}"`)
   console.log(`WA Bot BG: text="${text}"`)
 
-    const localSettings = await chrome.storage.local.get(['isActive', 'sessionResetDays'])
-        if (!localSettings.isActive) {
-          console.log('WA Bot BG: Bot is deactivated in the sidepanel — skipping')
-          return
-        }
+  const localSettings = await chrome.storage.local.get(['isActive'])
+  if (!localSettings.isActive) {
+    console.log('WA Bot BG: Bot is deactivated in the sidepanel — skipping')
+    return
+  }
 
   // Dedup guard
 if (lastProcessedId[sender] === messageId) {
@@ -361,37 +307,23 @@ lastProcessedId[sender] = messageId
     return
   }
 
-  // REPLACE WITH THIS
-const session = await getSupabaseSession();
-if (!session) {
-    console.log("WA Bot BG: ❌ User not logged into Dashboard. Ignoring.");
-    return;
-}
+  const session = await fetchDashboardSession()
+  if (!session || session.error) {
+    console.log('WA Bot BG: ❌ User not logged into Dashboard or session invalid. Ignoring.')
+    return
+  }
 
-const accessToken = session.access_token;
+  const { profile, activeJobs } = session
+  const geminiKey = profile?.gemini_key
+  const groqKey = profile?.groq_key
 
-// 1. Fetch Active Jobs for this recruiter from Supabase
-const jobsResp = await fetch(`https://${SUPABASE_PROJECT_ID}.supabase.co/rest/v1/jobs?is_active=eq.true`, {
-    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${accessToken}` }
-});
-const activeJobs = await jobsResp.json();
-
-// 2. Fetch API Keys from Profiles table
-const profileResp = await fetch(`https://${SUPABASE_PROJECT_ID}.supabase.co/rest/v1/profiles?id=eq.${session.user.id}`, {
-    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${accessToken}` }
-});
-const profile = await profileResp.json();
-
-const geminiKey = profile[0]?.gemini_key;
-const groqKey = profile[0]?.groq_key;
-
-if (activeJobs.length === 0 || !geminiKey) {
-    console.log("WA Bot BG: ❌ No active jobs or Gemini Key found in Supabase.");
-    return;
-}
+  if (!activeJobs?.length || !geminiKey) {
+    console.log('WA Bot BG: ❌ No active jobs or Gemini Key found in dashboard session.')
+    return
+  }
 
   // ── SESSION EXPIRY ─────────────────────────────────────────
-  const resetMs = (settings.sessionResetDays || 7) * 24 * 60 * 60 * 1000
+  const resetMs = 7 * 24 * 60 * 60 * 1000
   const lastTime = lastMessageTime[sender] || 0
   const isExpired = conversations[sender] && (now - lastTime > resetMs)
 
@@ -415,7 +347,13 @@ if (activeJobs.length === 0 || !geminiKey) {
   if (!conversations[sender]) {
     console.log(`WA Bot BG: 🆕 New sender — running intent check for ${sender}`)
 
-   const isJobRelated = await checkIntent(geminiKey, groqKey, combinedBriefing, text)
+    const combinedBriefing = activeJobs.map(job => {
+      const location = Array.isArray(job.locations) ? job.locations.join(', ') : job.locations || 'Unknown location'
+      const requirements = Array.isArray(job.requirements) ? job.requirements.join('; ') : job.requirements || ''
+      return `Role: ${job.title}\nLocation: ${location}\nRequirements: ${requirements}`
+    }).join('\n\n')
+
+    const isJobRelated = await checkIntent(geminiKey, groqKey, combinedBriefing, text)
 
     if (!isJobRelated) {
       console.log(`WA Bot BG: ⏭ Intent check failed — not job-related, pinging owner`)
@@ -447,14 +385,13 @@ if (activeJobs.length === 0 || !geminiKey) {
   conversations[sender].push({ role: 'user', content: text })
   broadcastUpdate()
 
-  console.log(`WA Bot BG: Calling AI (provider=${settings.provider})...`)
+  console.log('WA Bot BG: Calling AI...')
 
   // ── CALL AI ────────────────────────────────────────────────
   const MAX_HISTORY = 8
   const trimmedHistory = conversations[sender].slice(-MAX_HISTORY)
 
-// REPLACE WITH THIS
-const aiResult = await callAI('freetier', geminiKey, groqKey, activeJobs, '', trimmedHistory)
+  const aiResult = await callAI('freetier', geminiKey, groqKey, activeJobs, '', trimmedHistory)
 
 if (!aiResult) {
     console.log('WA Bot BG: ❌ AI returned null — check provider logs above')
@@ -785,6 +722,10 @@ async function callFreeTier(geminiKey, groqKey, systemPrompt, history) {
   }
 
   if (model.provider === 'groq') {
+    if (!groqKey) {
+      console.log('WA Bot BG: groqKey missing — falling back to Gemini')
+      return await callGemini(geminiKey, 'gemini-2.0-flash', systemPrompt, history)
+    }
     return await callGroq(groqKey, model.id, systemPrompt, history)
   }
 
