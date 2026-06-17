@@ -18,18 +18,18 @@ export default function ChatWidget({ candidate, onClose }: { candidate: Candidat
       </div>
 
       {/* Messages */}
-      <div className="flex-1 bg-[#f0f2f5] p-4 overflow-y-auto space-y-3">
-        <div className="flex justify-start">
-          <div className="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm max-w-[80%] text-xs font-medium">
-            How far boss? I dey apply for the rider job.
-          </div>
-        </div>
-        <div className="flex justify-end">
-          <div className="bg-[#dcf8c6] p-3 rounded-2xl rounded-tr-none shadow-sm max-w-[80%] text-xs font-medium">
-            Welcome! Do you have a valid driver's license?
-          </div>
-        </div>
+     // NEW
+<div className="flex-1 bg-[#f0f2f5] p-4 overflow-y-auto space-y-3">
+  {candidate.chatHistory.length === 0 ? (
+    <p className="text-xs text-gray-400 text-center mt-10">No messages yet.</p>
+  ) : candidate.chatHistory.map((m, i) => (
+    <div key={i} className={`flex ${m.role === 'user' ? 'justify-start' : 'justify-end'}`}>
+      <div className={`p-3 rounded-2xl shadow-sm max-w-[80%] text-xs font-medium ${m.role === 'user' ? 'bg-white rounded-tl-none' : 'bg-[#dcf8c6] rounded-tr-none'}`}>
+        {m.content}
       </div>
+    </div>
+  ))}
+</div>
 
       {/* Footer */}
       <div className="p-4 bg-white rounded-b-3xl border-t">

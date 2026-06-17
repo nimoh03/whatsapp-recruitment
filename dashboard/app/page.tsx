@@ -25,37 +25,45 @@ export default function RecruiterHub() {
   const [savingSettings, setSavingSettings] = useState(false);
 
   // --- FETCH JOBS FROM SUPABASE ---
-  const fetchJobs = async () => {
-    setLoading(true);
-    
-    // 1. Get the current user
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+// NEW
+const fetchJobs = async () => {
+  setLoading(true);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
 
-    // 2. Fetch jobs for this recruiter
-    // Lead Dev Note: We also need to get the count of candidates later, 
-    // but for now let's get the jobs and set default stats to 0.
-    const { data, error } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('recruiter_id', user.id)
-      .order('created_at', { ascending: false });
+  const { data, error } = await supabase
+    .from('jobs').select('*').eq('recruiter_id', user.id).order('created_at', { ascending: false });
 
-    if (error) {
-      console.error("Fetch error:", error.message);
-    } else {
-      // Map the DB data to our UI Job interface
-      const formattedJobs: Job[] = data.map(dbJob => ({
-        id: dbJob.id,
-        title: dbJob.title,
-        location: dbJob.locations ? dbJob.locations[0] : 'Remote',
-        candidatesCount: 0, // We will hook this up to real counts next
-        stats: { screening: 0, qualified: 0, disqualified: 0, attention: 0 }
-      }));
-      setJobs(formattedJobs);
-    }
+  if (error) {
+    console.error("Fetch error:", error.message);
     setLoading(false);
-  };
+    return;
+  }
+
+  const { data: candidateRows, error: candidatesError } = await supabase
+    .from('candidates').select('job_id, status').eq('recruiter_id', user.id);
+
+  if (candidatesError) console.error("Fetch candidate stats error:", candidatesError.message);
+
+  const formattedJobs: Job[] = data.map(dbJob => {
+    const rows = (candidateRows || []).filter(c => c.job_id === dbJob.id);
+    const countByStatus = (s: string) => rows.filter(r => r.status === s).length;
+    return {
+      id: dbJob.id,
+      title: dbJob.title,
+      location: dbJob.locations ? dbJob.locations[0] : 'Remote',
+      candidatesCount: rows.length,
+      stats: {
+        screening: countByStatus('screening'),
+        qualified: countByStatus('qualified'),
+        disqualified: countByStatus('disqualified'),
+        attention: countByStatus('needs_attention') + countByStatus('needs_owner'),
+      }
+    };
+  });
+  setJobs(formattedJobs);
+  setLoading(false);
+};
 
   const fetchSettings = async () => {
     setSettingsLoading(true);

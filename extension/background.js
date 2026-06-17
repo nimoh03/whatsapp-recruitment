@@ -1,8 +1,53 @@
-const DASHBOARD_BASE_URL = 'http://localhost:3000' // Change to your deployed dashboard URL when ready
+// NEW
+const DEFAULT_DASHBOARD_BASE_URL = 'http://localhost:3000'
+const SUPABASE_URL = 'https://iwdvkljbvbftbjmzvmqe.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3ZHZrbGpidmJmdGJqbXp2bXFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MjM4MTcsImV4cCI6MjA5NzE5OTgxN30.QMIdhha3Tn846MFuAhJ1Jtu6O0G04K5l-XvVwTeMWrA'
+
+async function syncCandidateToSupabase({ accessToken, recruiterId, jobId, sender, status, lastMessage, chatHistory }) {
+  if (!accessToken || !recruiterId) {
+    console.log('WA Bot BG: ⏭ Skipping Supabase sync — no access token/recruiter id')
+    return
+  }
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/candidates?on_conflict=recruiter_id,phone`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        recruiter_id: recruiterId,
+        job_id: jobId,
+        phone: sender,
+        name: sender,
+        status,
+        last_message: lastMessage,
+        chat_history: chatHistory,
+        updated_at: new Date().toISOString(),
+      }),
+    })
+    if (!response.ok) {
+      console.warn('WA Bot BG: Supabase sync failed', response.status, await response.text())
+    }
+  } catch (error) {
+    console.warn('WA Bot BG: Supabase sync error', error)
+  }
+}
+
+// Lets you point the extension at your deployed dashboard via
+// chrome.storage.local.dashboardBaseUrl, without rebuilding/repackaging
+// the extension every time the URL changes.
+async function getDashboardBaseUrl() {
+  const { dashboardBaseUrl } = await chrome.storage.local.get(['dashboardBaseUrl'])
+  return dashboardBaseUrl || DEFAULT_DASHBOARD_BASE_URL
+}
 
 async function fetchDashboardSession() {
   try {
-    const response = await fetch(`${DASHBOARD_BASE_URL}/api/extension/session`, {
+  const baseUrl = await getDashboardBaseUrl()
+const response = await fetch(`${baseUrl}/api/extension/session`, {
       method: 'GET',
       credentials: 'include',
       headers: {
@@ -216,6 +261,11 @@ Respond with ONLY valid JSON, nothing else:
 
     if (!rawText) return true // fail open — if AI fails, engage anyway
 
+    syncCandidateToSupabase({
+  accessToken, recruiterId: user?.id, jobId: activeJobs[0]?.id || null,
+  sender, status: 'needs_owner', lastMessage: text, chatHistory: conversations[sender] || [],
+})
+
     const cleaned = rawText.replace(/```json|```/g, '').trim()
     const parsed = JSON.parse(cleaned)
     return parsed.isJobRelated !== false // default true if missing
@@ -278,7 +328,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true })
   }
 
+   if (message.type === 'REQUEST_SESSION') {
+    fetchDashboardSession().then((session) => {
+      sendResponse({ session })
+    })
+    
   return true
+   }
 })
 
  async function handleNewMessage({ messageId, sender, text }) {
@@ -313,9 +369,9 @@ lastProcessedId[sender] = messageId
     return
   }
 
-  const { profile, activeJobs } = session
-  const geminiKey = profile?.gemini_key
-  const groqKey = profile?.groq_key
+  const { profile, activeJobs, user, accessToken } = session
+const geminiKey = profile?.gemini_key
+const groqKey = profile?.groq_key
 
   if (!activeJobs?.length || !geminiKey) {
     console.log('WA Bot BG: ❌ No active jobs or Gemini Key found in dashboard session.')
@@ -423,6 +479,10 @@ if (!aiResult) {
       message: `${sender} sent something the bot can't handle. Please reply manually.`
     })
     chrome.runtime.sendMessage({ type: 'PING_OWNER', sender }).catch(() => {})
+    syncCandidateToSupabase({
+  accessToken, recruiterId: user?.id, jobId: matchedJobId || activeJobs[0]?.id || null,
+  sender, status: 'needs_owner', lastMessage: text, chatHistory: conversations[sender],
+})
     return
   }
 
@@ -443,12 +503,17 @@ if (!aiResult) {
     }
   }
 
-  conversations[sender].push({ role: 'assistant', content: replyMessage })
-  await persistState()
-  broadcastUpdate()
+// NEW
+conversations[sender].push({ role: 'assistant', content: replyMessage })
+await persistState()
+broadcastUpdate()
 
-  lastReplyPerSender[sender] = Date.now()
+syncCandidateToSupabase({
+  accessToken, recruiterId: user?.id, jobId: matchedJobId || activeJobs[0]?.id || null,
+  sender, status: candidateStatus[sender] || 'screening', lastMessage: replyMessage, chatHistory: conversations[sender],
+})
 
+lastReplyPerSender[sender] = Date.now()
   console.log('WA Bot BG: Sending SEND_REPLY to content script...')
   sendReplyToTab(replyMessage, 0)
 }
