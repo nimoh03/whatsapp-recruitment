@@ -27,11 +27,41 @@ async function getSupabaseSession() {
 
 // Helper to keep code clean
 function processCookies(cookies, resolve) {
-  const authCookie = cookies.find(c => c.name.includes("-auth-token"));
-  if (authCookie) {
-    const sessionData = JSON.parse(decodeURIComponent(authCookie.value));
-    console.log("Lead Dev: ✅ SESSION FOUND!", sessionData.user.email);
-    resolve(sessionData);
+  // Only match cookies belonging to OUR Supabase project, e.g.
+  // "sb-iwdvkljbvbftbjmzvmqe-auth-token" or its chunked variants
+  // ("...-auth-token.0", "...-auth-token.1", etc). This avoids
+  // accidentally grabbing stale session cookies from a different
+  // Supabase project also running on localhost.
+  const prefix = `sb-${SUPABASE_PROJECT_ID}-auth-token`;
+  const authCookies = cookies
+    .filter(c => c.name.startsWith(prefix))
+    .sort((a, b) => {
+      const aIdx = parseInt(a.name.split('.').pop(), 10);
+      const bIdx = parseInt(b.name.split('.').pop(), 10);
+      const aNum = isNaN(aIdx) ? -1 : aIdx;
+      const bNum = isNaN(bIdx) ? -1 : bIdx;
+      return aNum - bNum;
+    });
+
+  if (authCookies.length > 0) {
+    try {
+      const rawValue = authCookies.map(c => decodeURIComponent(c.value)).join('');
+
+      let jsonString;
+      if (rawValue.startsWith("base64-")) {
+        jsonString = atob(rawValue.substring(7));
+      } else {
+        jsonString = rawValue;
+      }
+
+      const sessionData = JSON.parse(jsonString);
+      console.log("Lead Dev: ✅ SESSION FOUND!", sessionData.user.email);
+      resolve(sessionData);
+    } catch (e) {
+      console.error("Lead Dev: Failed to parse auth cookie:", e);
+      console.log("Cookie names found:", cookies.map(c => c.name));
+      resolve(null);
+    }
   } else {
     console.log("Found names:", cookies.map(c => c.name));
     resolve(null);
