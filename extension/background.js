@@ -3,33 +3,106 @@ const DEFAULT_DASHBOARD_BASE_URL = 'http://localhost:3000'
 const SUPABASE_URL = 'https://iwdvkljbvbftbjmzvmqe.supabase.co'
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3ZHZrbGpidmJmdGJqbXp2bXFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MjM4MTcsImV4cCI6MjA5NzE5OTgxN30.QMIdhha3Tn846MFuAhJ1Jtu6O0G04K5l-XvVwTeMWrA'
 
-async function syncCandidateToSupabase({ accessToken, recruiterId, jobId, sender, status, lastMessage, chatHistory }) {
-  if (!accessToken || !recruiterId) {
-    console.log('WA Bot BG: ⏭ Skipping Supabase sync — no access token/recruiter id')
+// Looks up a candidate row by phone_number + job_id, creating one if it
+// doesn't exist yet. Returns { id, status } or null on failure.
+// NOTE: candidates has no recruiter_id column — ownership is implied via
+// job_id -> jobs.recruiter_id, so RLS on `candidates`/`messages` needs to
+// allow access based on that join (or this will fail with 401/403).
+async function findOrCreateCandidate({ accessToken, jobId, phoneNumber, fullName, status }) {
+  const headers = {
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${accessToken}`,
+  }
+
+  const jobFilter = jobId ? `job_id=eq.${jobId}` : `job_id=is.null`
+  const lookupUrl = `${SUPABASE_URL}/rest/v1/candidates?phone_number=eq.${encodeURIComponent(phoneNumber)}&${jobFilter}&select=id,status`
+
+  const lookupResp = await fetch(lookupUrl, { headers })
+  if (!lookupResp.ok) {
+    console.warn('WA Bot BG: candidate lookup failed', lookupResp.status, await lookupResp.text())
+    return null
+  }
+
+  const existing = await lookupResp.json()
+  if (existing.length > 0) return existing[0]
+
+  const insertResp = await fetch(`${SUPABASE_URL}/rest/v1/candidates`, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation',
+    },
+    body: JSON.stringify({
+      job_id: jobId,
+      phone_number: phoneNumber,
+      // TODO: swap for a real contact name once content.js captures one
+      // from the WhatsApp chat header instead of using the phone number.
+      full_name: fullName || phoneNumber,
+      status: status || 'screening',
+    }),
+  })
+
+  if (!insertResp.ok) {
+    console.warn('WA Bot BG: candidate insert failed', insertResp.status, await insertResp.text())
+    return null
+  }
+
+  const inserted = await insertResp.json()
+  return inserted[0]
+}
+
+// Syncs one candidate + any NEW conversation turns to Supabase.
+// `newMessages` must only contain turns added since the LAST sync for this
+// sender (not the whole conversation) — each turn becomes its own row in
+// the `messages` table, so re-sending old turns would duplicate them.
+async function syncCandidateToSupabase({ accessToken, jobId, sender, fullName, status, newMessages }) {
+  if (!accessToken) {
+    console.log('WA Bot BG: ⏭ Skipping Supabase sync — no access token')
     return
   }
+
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/candidates?on_conflict=recruiter_id,phone`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify({
-        recruiter_id: recruiterId,
-        job_id: jobId,
-        phone: sender,
-        name: sender,
-        status,
-        last_message: lastMessage,
-        chat_history: chatHistory,
-        updated_at: new Date().toISOString(),
-      }),
+    const candidate = await findOrCreateCandidate({
+      accessToken, jobId, phoneNumber: sender, fullName, status,
     })
-    if (!response.ok) {
-      console.warn('WA Bot BG: Supabase sync failed', response.status, await response.text())
+    if (!candidate) return
+
+    if (status && status !== candidate.status) {
+      const patchResp = await fetch(`${SUPABASE_URL}/rest/v1/candidates?id=eq.${candidate.id}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ status }),
+      })
+      if (!patchResp.ok) {
+        console.warn('WA Bot BG: status update failed', patchResp.status, await patchResp.text())
+      }
+    }
+
+    if (newMessages && newMessages.length > 0) {
+      const rows = newMessages.map(m => ({
+        candidate_id: candidate.id,
+        role: m.role,
+        content: m.content,
+      }))
+      const msgResp = await fetch(`${SUPABASE_URL}/rest/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify(rows),
+      })
+      if (!msgResp.ok) {
+        console.warn('WA Bot BG: message insert failed', msgResp.status, await msgResp.text())
+      }
     }
   } catch (error) {
     console.warn('WA Bot BG: Supabase sync error', error)
@@ -261,11 +334,6 @@ Respond with ONLY valid JSON, nothing else:
 
     if (!rawText) return true // fail open — if AI fails, engage anyway
 
-    syncCandidateToSupabase({
-  accessToken, recruiterId: user?.id, jobId: activeJobs[0]?.id || null,
-  sender, status: 'needs_owner', lastMessage: text, chatHistory: conversations[sender] || [],
-})
-
     const cleaned = rawText.replace(/```json|```/g, '').trim()
     const parsed = JSON.parse(cleaned)
     return parsed.isJobRelated !== false // default true if missing
@@ -422,6 +490,10 @@ const groqKey = profile?.groq_key
         title: '⚠️ WA Recruit needs you',
         message: `${sender} sent something unrelated to the job. Please handle manually.`
       })
+      syncCandidateToSupabase({
+        accessToken, jobId: activeJobs[0]?.id || null,
+        sender, status: 'needs_owner', newMessages: [{ role: 'user', content: text }],
+      })
       return
     }
 
@@ -480,8 +552,8 @@ if (!aiResult) {
     })
     chrome.runtime.sendMessage({ type: 'PING_OWNER', sender }).catch(() => {})
     syncCandidateToSupabase({
-  accessToken, recruiterId: user?.id, jobId: matchedJobId || activeJobs[0]?.id || null,
-  sender, status: 'needs_owner', lastMessage: text, chatHistory: conversations[sender],
+  accessToken, jobId: matchedJobId || activeJobs[0]?.id || null,
+  sender, status: 'needs_owner', newMessages: [{ role: 'user', content: text }],
 })
     return
   }
@@ -509,31 +581,32 @@ await persistState()
 broadcastUpdate()
 
 syncCandidateToSupabase({
-  accessToken, recruiterId: user?.id, jobId: matchedJobId || activeJobs[0]?.id || null,
-  sender, status: candidateStatus[sender] || 'screening', lastMessage: replyMessage, chatHistory: conversations[sender],
+  accessToken, jobId: matchedJobId || activeJobs[0]?.id || null,
+  sender, status: candidateStatus[sender] || 'screening',
+  newMessages: [{ role: 'user', content: text }, { role: 'assistant', content: replyMessage }],
 })
 
 lastReplyPerSender[sender] = Date.now()
   console.log('WA Bot BG: Sending SEND_REPLY to content script...')
-  sendReplyToTab(replyMessage, 0)
+  sendReplyToTab(replyMessage, sender, 0)
 }
 
 
 // ─── SEND REPLY WITH RETRY ────────────────────────────────────
 // Retries up to 3 times with 1s delay in case the content script
 // context reloaded and needs a moment to re-register its listener.
-function sendReplyToTab(replyMessage, attempt) {
+function sendReplyToTab(replyMessage, sender, attempt) {
   chrome.tabs.query({ url: 'https://web.whatsapp.com/*' }, (tabs) => {
     if (tabs.length === 0) {
       console.log('WA Bot BG: ❌ No WhatsApp tab found')
       return
     }
     const tabId = tabs[0].id
-    chrome.tabs.sendMessage(tabId, { type: 'SEND_REPLY', reply: replyMessage }, (resp) => {
+    chrome.tabs.sendMessage(tabId, { type: 'SEND_REPLY', reply: replyMessage, sender }, (resp) => {
       if (chrome.runtime.lastError) {
         console.log(`WA Bot BG: ⚠️ sendMessage attempt ${attempt + 1} failed:`, chrome.runtime.lastError.message)
         if (attempt < 3) {
-          setTimeout(() => sendReplyToTab(replyMessage, attempt + 1), 1000)
+          setTimeout(() => sendReplyToTab(replyMessage, sender, attempt + 1), 1000)
         } else {
           console.log('WA Bot BG: ❌ All retry attempts failed — reply not delivered')
         }

@@ -14,6 +14,7 @@ let ongoingInterviews = new Set()
 let activeLock = null
 let lockTimeout = null
 let pendingReplies = new Set()
+let pendingReplyTimers = new Map()
 // ─── LOCK HELPERS ─────────────────────────────────────────────
 function acquireLock(sender) {
   if (activeLock !== null) return false   // already locked
@@ -36,6 +37,31 @@ function releaseLock() {
   activeLock = null
   clearTimeout(lockTimeout)
   lockTimeout = null
+}
+
+function completePendingReply(sender) {
+  if (!sender) return
+
+  if (pendingReplyTimers.has(sender)) {
+    clearTimeout(pendingReplyTimers.get(sender))
+    pendingReplyTimers.delete(sender)
+  }
+
+  if (pendingReplies.has(sender)) {
+    pendingReplies.delete(sender)
+    console.log(`WA Bot: ✅ Pending reply complete for "${sender}"`)
+  }
+
+  releaseLock()
+
+  if (botRunning) {
+    setTimeout(() => {
+      if (activeLock === null && botRunning) {
+        console.log(`WA Bot: 🔄 Scheduling scan after reply completion for "${sender}"`)
+        runScan()
+      }
+    }, 800)
+  }
 }
 
 // ─── BOOT ─────────────────────────────────────────────────────
@@ -88,51 +114,111 @@ function onVisibility() {
   if (document.visibilityState === 'visible' && botRunning) runScan()
 }
 
+// ─── QUERY HELPERS ───────────────────────────────────────────
+function queryFirst(root, selectors) {
+  for (const selector of selectors) {
+    const match = root.querySelector(selector)
+    if (match) return match
+  }
+  return null
+}
+
+function queryAll(root, selectors) {
+  for (const selector of selectors) {
+    const matches = Array.from(root.querySelectorAll(selector))
+    if (matches.length) return matches
+  }
+  return []
+}
+
+function getMessageId(msg) {
+  const idEl = msg.closest('[data-id]')
+  return idEl ? idEl.getAttribute('data-id') : null
+}
+
+function normalizeText(text) {
+  if (!text) return null
+  const cleaned = text.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim()
+  return cleaned || null
+}
+
+function extractMessageText(msg) {
+  const selectors = [
+    '.copyable-text',
+    '[data-testid="selectable-text"]',
+    '[data-pre-plain-text] span[dir="ltr"]',
+    '[data-pre-plain-text] span[dir="rtl"]',
+    '[data-pre-plain-text] span',
+    'span[dir="ltr"]',
+    'span[dir="auto"]',
+    'span',
+  ]
+
+  for (const selector of selectors) {
+    const el = msg.querySelector(selector)
+    if (el?.innerText?.trim()) {
+      const text = normalizeText(el.innerText)
+      if (text) return text
+    }
+  }
+
+  const allSpans = Array.from(msg.querySelectorAll('span'))
+  const candidates = allSpans
+    .map(s => normalizeText(s.innerText))
+    .filter(Boolean)
+  if (candidates.length) return candidates.reduce((a, b) => (a.length >= b.length ? a : b))
+
+  return null
+}
+
+function isOutgoingMessage(msg) {
+  const msgId = getMessageId(msg)
+  if (msgId?.startsWith('true_')) return true
+  if (msg.closest('.message-out')) return true
+  if (msg.querySelector('[data-testid="msg-dblcheck"], [data-testid="msg-check"]')) return true
+
+  const panel = document.querySelector('#main') || document.body
+  if (panel) {
+    const panelRect = panel.getBoundingClientRect()
+    const msgRect = msg.getBoundingClientRect()
+    const centerX = msgRect.left + msgRect.width / 2
+    if (centerX > panelRect.left + panelRect.width * 0.55) return true
+  }
+
+  return false
+}
+
+function isCandidateText(text) {
+  if (!text) return false
+  const junkPattern = /^[\s\-\/\.\,\!\?\*\_\+\=\|\\\^~`@#$%^&]+$/
+  return !junkPattern.test(text)
+}
+
 // ─── GET ALL UNPROCESSED INCOMING MESSAGES ────────────────────
 // Returns messages in chronological order that haven't been
 // processed yet. Handles the case where candidate sent multiple
 // messages while bot was locked.
 function getAllUnprocessedMessages(sender) {
-  let containers = Array.from(document.querySelectorAll('.message-in [data-testid="msg-container"]'))
-  if (containers.length === 0) containers = Array.from(document.querySelectorAll('.message-in'))
-  if (containers.length === 0) {
-    containers = Array.from(document.querySelectorAll('[data-testid="msg-container"]'))
-      .filter(m => !m.closest('.message-out'))
-  }
+  const containers = queryAll(document, [
+    '.message-in [data-testid="msg-container"]',
+    '.message-in',
+    '[data-testid="msg-container"]',
+    '[data-id]'
+  ])
+
+  if (containers.length === 0) return []
 
   const unprocessed = []
 
   for (const msg of containers) {
-    const idEl = msg.closest('[data-id]')
-    const msgId = idEl ? idEl.getAttribute('data-id') : null
- if (msgId && msgId.startsWith('true_')) continue
-    if (msg.closest('.message-out')) continue
+    if (isOutgoingMessage(msg)) continue
+
+    const msgId = getMessageId(msg)
     if (!msgId) continue
     if (processedMessages.has(msgId)) continue
 
-    let text = null
-    const copyableText = msg.querySelector('.copyable-text')
-    if (copyableText) text = copyableText.innerText?.trim()
-    if (!text) {
-      const selectable = msg.querySelector('[data-testid="selectable-text"]')
-      if (selectable) text = selectable.innerText?.trim()
-    }
-    if (!text) {
-      const ltrSpan = msg.querySelector('span[dir="ltr"]')
-      if (ltrSpan) text = ltrSpan.innerText?.trim()
-    }
-    if (!text) {
-      const anySpan = msg.querySelector('span')
-      if (anySpan) text = anySpan.innerText?.trim()
-    }
-    if (!text) continue
-
-    text = text.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim()
-    if (!text) continue
-
-    // Junk filter
-    const junkPattern = /^[\s\-\/\.\,\!\?\*\_\+\=\|\\\^~`@#$%^&]+$/
-    if (junkPattern.test(text)) continue
+    const text = extractMessageText(msg)
+    if (!isCandidateText(text)) continue
 
     unprocessed.push({ text, dedupeKey: msgId, timestamp: Date.now() })
   }
@@ -313,17 +399,29 @@ function findFirstUnreadChat() {
 
 // ─── GET SENDER NAME FROM ROW (sidebar, before clicking) ──────
 // For unsaved numbers, WhatsApp uses span[dir="ltr"] in the sidebar row.
-// We try title attr first (saved contacts), then auto, then ltr.
+// We try several stable selectors in priority order.
 function getSenderNameFromRow(row) {
-  const titleSpan = row.querySelector('span[title]')
-  if (titleSpan?.getAttribute('title')?.trim()) return titleSpan.getAttribute('title').trim()
+  const selectors = [
+    'span[title]',
+    '[data-testid="cell-frame-container"] span',
+    'span[dir="auto"]',
+    'span[dir="ltr"]',
+    'span[class*="chat-title"]',
+    'span[class*="contact-name"]',
+    '[data-testid="conversation-panel-title"] span',
+  ]
 
-  const autoSpan = row.querySelector('span[dir="auto"]')
-  if (autoSpan?.innerText?.trim()) return autoSpan.innerText.trim()
+  for (const selector of selectors) {
+    const el = row.querySelector(selector)
+    if (!el) continue
 
-  // Unsaved numbers show up as dir="ltr" in the sidebar
-  const ltrSpan = row.querySelector('span[dir="ltr"]')
-  if (ltrSpan?.innerText?.trim()) return ltrSpan.innerText.trim()
+    if (selector === 'span[title]' && el.getAttribute('title')?.trim()) {
+      return el.getAttribute('title').trim()
+    }
+
+    const text = el.innerText?.trim()
+    if (text) return text
+  }
 
   return null
 }
@@ -448,16 +546,18 @@ function forwardToBackground(sender, msgKey, text) {
   }, (response) => {
     if (chrome.runtime.lastError) {
       console.error('WA Bot:', chrome.runtime.lastError.message)
-      pendingReplies.delete(sender)
-      releaseLock()
+      completePendingReply(sender)
       return
     }
 
     console.log('WA Bot: ✅ Message sent to background')
-   setTimeout(() => {
-  pendingReplies.delete(sender)
-  releaseLock()
-}, 35000)
+
+    const fallbackTimeout = setTimeout(() => {
+      console.warn(`WA Bot: ⚠️ Pending reply timeout for "${sender}" — clearing state`)
+      completePendingReply(sender)
+    }, 35000)
+
+    pendingReplyTimers.set(sender, fallbackTimeout)
   })
 }
 
@@ -502,10 +602,15 @@ function getSenderName(fallback) {
 // ─── WAIT FOR MESSAGES ────────────────────────────────────────
 function waitForMessages() {
   return new Promise((resolve) => {
-    const maxAttempts = 8
+    const maxAttempts = 12
     let attempts = 0
     const check = setInterval(() => {
-      const msgs = document.querySelectorAll('[data-testid="msg-container"]')
+      const msgs = queryAll(document, [
+        '[data-testid="msg-container"]',
+        '.message-in',
+        '.message-out',
+        '[data-id]'
+      ])
       if (msgs.length > 0 || ++attempts >= maxAttempts) {
         clearInterval(check)
         resolve()
@@ -515,142 +620,69 @@ function waitForMessages() {
 }
 
 // ─── GET LAST INCOMING MESSAGE ────────────────────────────────
-// Uses data-id for deduplication. Three strategies to find incoming bubbles
-// because WhatsApp doesn't always wrap every message in msg-container.
+// Uses data-id for deduplication. Multiple strategies are used to
+// find incoming bubbles because WhatsApp HTML can vary across versions.
 function getLastIncomingMessage(sender) {
-  // Strategy A: .message-in with msg-container testid (most specific)
-  let containers = Array.from(document.querySelectorAll('.message-in [data-testid="msg-container"]'))
-  console.log(`WA Bot: Strategy A found ${containers.length} containers`)
-
-  // Strategy B: any .message-in element (catches bubbles without msg-container wrapper)
-  if (containers.length === 0) {
-    containers = Array.from(document.querySelectorAll('.message-in'))
-    console.log(`WA Bot: Strategy B found ${containers.length} .message-in elements`)
-  }
-
-  // Strategy C: all msg-containers that aren't inside .message-out
-  if (containers.length === 0) {
-    containers = Array.from(document.querySelectorAll('[data-testid="msg-container"]'))
-      .filter(m => !m.closest('.message-out'))
-    console.log(`WA Bot: Strategy C found ${containers.length} non-outgoing containers`)
-  }
+  const containers = queryAll(document, [
+    '.message-in [data-testid="msg-container"]',
+    '.message-in',
+    '[data-testid="msg-container"]',
+    '[data-id]'
+  ])
+  console.log(`WA Bot: getLastIncomingMessage found ${containers.length} candidate containers`)
 
   for (let i = containers.length - 1; i >= 0; i--) {
     const msg = containers[i]
+    if (isOutgoingMessage(msg)) continue
 
-    // Get the unique message ID from the closest data-id ancestor
-    // data-id format: "true_PHONENUMBER_MSGID" (outgoing) or "false_PHONENUMBER_MSGID" (incoming)
-    const idEl = msg.closest('[data-id]')
-    const msgId = idEl ? idEl.getAttribute('data-id') : null
+    const msgId = getMessageId(msg)
+    if (!msgId) continue
 
-    // Skip if this is an outgoing message (data-id starts with "true_")
-  if (msgId && msgId.startsWith('true_')) continue
-    if (msg.closest('.message-out')) continue
+    const text = extractMessageText(msg)
+    if (!isCandidateText(text)) continue
 
-    let text = null
-
-    // Layer 1: .copyable-text — WhatsApp's outer text wrapper.
-    // Using .innerText on this flattens ALL nested child nodes (slashes,
-    // emojis, special chars, hyperlink-wrapped text) into clean plain text.
-    const copyableText = msg.querySelector('.copyable-text')
-    if (copyableText) text = copyableText.innerText?.trim()
-
-    // Layer 2: data-testid="selectable-text" — WhatsApp's copy-text hook
-    if (!text) {
-      const selectableText = msg.querySelector('[data-testid="selectable-text"]')
-      if (selectableText) text = selectableText.innerText?.trim()
-    }
-
-    // Layer 3: data-pre-plain-text wrapper spans
-    if (!text) {
-      const preText = msg.querySelector(
-        '[data-pre-plain-text] span[dir="ltr"],' +
-        '[data-pre-plain-text] span[dir="rtl"],' +
-        '[data-pre-plain-text] span'
-      )
-      if (preText) text = preText.innerText?.trim()
-    }
-
-    // Layer 4: dir="ltr" span (unsaved number messages)
-    if (!text) {
-      const ltrSpan = msg.querySelector('span[dir="ltr"]')
-      if (ltrSpan) text = ltrSpan.innerText?.trim()
-    }
-
-    // Layer 5: any span
-    if (!text) {
-      const anySpan = msg.querySelector('span')
-      if (anySpan) text = anySpan.innerText?.trim()
-    }
-
-    // Layer 6: Nuclear — all spans, filter timestamps, pick longest
-    if (!text) {
-      const allSpans = Array.from(msg.querySelectorAll('span'))
-      const candidates = allSpans
-        .map(s => s.innerText?.trim())
-        .filter(t => t && t.length > 2 && !/^\d{1,2}:\d{2}$/.test(t))
-      if (candidates.length) {
-        text = candidates.reduce((a, b) => (a.length >= b.length ? a : b))
-      }
-    }
-
-    if (!text) continue
-
-    // Strip trailing timestamps WhatsApp sometimes includes in copyable-text
-    // e.g. "Yes I can sir / ma 6:42 AM" → "Yes I can sir / ma"
-    text = text.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim()
-
-    if (!text) continue
-
-    // Deduplicate by data-id (unique per message) — NOT by text content.
-    // This is the key fix: "Yes" in turn 2 and "Yes" in turn 5 have different
-    // data-ids so both get processed correctly.
-   if (!msgId) {
-      console.log(`WA Bot: No data-id on message — skipping to avoid dedup collision`)
-      continue
-    }
-
-    const dedupeKey = msgId
-    const isNew = !processedMessages.has(dedupeKey)
-
-    console.log(`WA Bot: Extracted text: "${text.substring(0, 60)}" | id: ${msgId} | isNew: ${isNew}`)
-    return { text, isNew, dedupeKey }
-}
+    console.log(`WA Bot: Last incoming text from ${sender}: "${text.substring(0, 80)}" | id=${msgId}`)
+    return { text, isNew: !processedMessages.has(msgId), dedupeKey: msgId }
+  }
 
   return { text: null, isNew: false, dedupeKey: null }
 }
 
 // ─── TYPE AND SEND REPLY ──────────────────────────────────────
 function typeReply(replyText) {
-  console.log('WA Bot: Typing reply...')
+  return new Promise((resolve) => {
+    console.log('WA Bot: Typing reply...')
 
-  const inputBox =
-    document.querySelector('div[contenteditable="true"][data-tab="10"]') ||
-    document.querySelector('[data-testid="conversation-compose-box-input"]')
+    const inputBox =
+      document.querySelector('div[contenteditable="true"][data-tab="10"]') ||
+      document.querySelector('[data-testid="conversation-compose-box-input"]')
 
-  if (!inputBox) {
-    console.log('WA Bot: ❌ Input box not found')
-    return
-  }
-
-  inputBox.focus()
-  document.execCommand('insertText', false, replyText)
-
-const delay = 1000 + Math.floor(Math.random() * 1500)
-  console.log(`WA Bot: Sending reply in ${delay}ms...`)
-
-  setTimeout(() => {
-    const sendBtn = document.querySelector('[data-testid="send"]')
-    if (sendBtn) {
-      sendBtn.click()
-      console.log('WA Bot: ✅ Sent via button')
-    } else {
-      inputBox.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
-      }))
-      console.log('WA Bot: ✅ Sent via Enter key')
+    if (!inputBox) {
+      console.log('WA Bot: ❌ Input box not found')
+      resolve()
+      return
     }
-  }, delay)
+
+    inputBox.focus()
+    document.execCommand('insertText', false, replyText)
+
+    const delay = 1000 + Math.floor(Math.random() * 1500)
+    console.log(`WA Bot: Sending reply in ${delay}ms...`)
+
+    setTimeout(() => {
+      const sendBtn = document.querySelector('[data-testid="send"]')
+      if (sendBtn) {
+        sendBtn.click()
+        console.log('WA Bot: ✅ Sent via button')
+      } else {
+        inputBox.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
+        }))
+        console.log('WA Bot: ✅ Sent via Enter key')
+      }
+      resolve()
+    }, delay)
+  })
 }
 
 // ─── LISTEN FOR REPLY FROM BACKGROUND ────────────────────────
@@ -659,7 +691,10 @@ const delay = 1000 + Math.floor(Math.random() * 1500)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SEND_REPLY') {
     console.log('WA Bot: 📨 SEND_REPLY received — typing now')
-    typeReply(message.reply)
+    typeReply(message.reply).then(() => {
+      console.log(`WA Bot: ✅ Typed reply for "${message.sender || 'unknown'}"`)
+      completePendingReply(message.sender)
+    })
     sendResponse({ ok: true })
   }
 
