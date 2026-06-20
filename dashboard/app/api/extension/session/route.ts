@@ -1,12 +1,24 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Credentials": "true",
-};
+// We replace the static CORS_HEADERS object with a function
+// that dynamically reads the origin of the incoming request.
+function getCorsHeaders(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  
+  // Echo the exact origin if it's from a chrome extension.
+  // Otherwise, default to your localhost environment to prevent wildcard errors.
+  const allowedOrigin = origin?.startsWith("chrome-extension://") 
+    ? origin 
+    : "http://localhost:3000";
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
 
 function getSupabaseClient(request: NextRequest) {
   return createServerClient(
@@ -28,10 +40,11 @@ function getSupabaseClient(request: NextRequest) {
   );
 }
 
-export async function OPTIONS() {
+// Pass the request into OPTIONS so it can read the headers
+export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
     status: 204,
-    headers: CORS_HEADERS,
+    headers: getCorsHeaders(request),
   });
 }
 
@@ -42,11 +55,14 @@ export async function GET(request: NextRequest) {
     error: userError,
   } = await supabase.auth.getUser();
 
+  // Generate our dynamic headers for this specific request
+  const corsHeaders = getCorsHeaders(request);
+
   if (userError || !user) {
     return new NextResponse(JSON.stringify({ error: "not_authenticated" }), {
       status: 401,
       headers: {
-        ...CORS_HEADERS,
+        ...corsHeaders,
         "Content-Type": "application/json",
       },
     });
@@ -80,6 +96,6 @@ export async function GET(request: NextRequest) {
       activeJobs,
       accessToken: session?.access_token ?? null,
     }),
-    { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } },
   );
 }

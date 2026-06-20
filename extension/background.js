@@ -210,9 +210,7 @@ if (message.type === 'NETWORK_OFFLINE') {
 
 startRetryLoop()
 
-// REPLACE your old checkConnectivity with this:
 async function checkConnectivity() {
-  // navigator.onLine is built into the browser. No fetch needed!
   const online = navigator.onLine; 
   
   if (online && !isOnline) {
@@ -227,13 +225,24 @@ async function checkConnectivity() {
 }
 
 // ─── FREE TIER MODEL POOL ─────────────────────────────────────
+// Ordered from best Gemini tiers down to secondary tiers, interleaved with Groq cluster models
+const FREE_MODELS = [
+  { id: 'llama-3.3-70b-versatile', provider: 'groq', softCap: 20 },
+  { id: 'gemini-3.5-flash', provider: 'gemini', softCap: 20 },
+  { id: 'llama-3.1-8b-instant', provider: 'groq', softCap: 20 },
+  { id: 'gemini-3.1-flash-lite', provider: 'gemini', softCap: 20 },
+  { id: 'mixtral-8x7b-32768', provider: 'groq', softCap: 20 },
+  { id: 'gemini-3-flash', provider: 'gemini', softCap: 20 },
+  { id: 'gemma2-9b-it', provider: 'groq', softCap: 20 },
+  { id: 'gemini-2.5-flash', provider: 'gemini', softCap: 20 },
+  { id: 'gemini-2.5-flash-lite', provider: 'gemini', softCap: 20 }
+]
 
 // ─── MODEL COUNTER HELPERS ────────────────────────────────────
 async function getModelCounters() {
   const data = await chrome.storage.local.get(['modelCounters', 'modelCounterDate'])
   const today = new Date().toDateString()
 
-  // Reset counters if it's a new day
   if (data.modelCounterDate !== today) {
     const fresh = {}
     FREE_MODELS.forEach(m => fresh[m.id] = 0)
@@ -251,10 +260,14 @@ async function incrementModelCounter(modelId) {
   await chrome.storage.local.set({ modelCounters: counters })
 }
 
-async function getNextFreeModel() {
+async function getNextFreeModel(hasGroqKey) {
   const counters = await getModelCounters()
 
   for (const model of FREE_MODELS) {
+    if (model.provider === 'groq' && !hasGroqKey) {
+      continue;
+    }
+
     const used = counters[model.id] || 0
     if (used < model.softCap) {
       console.log(`WA Bot BG: 🎯 Using model "${model.id}" (${used}/${model.softCap})`)
@@ -268,9 +281,6 @@ async function getNextFreeModel() {
 }
 
 // ─── INTENT DETECTION ─────────────────────────────────────────
-// Called only on the very first message from a new sender.
-// Makes a lightweight AI call to decide if the message is job-related.
-// Returns true = engage, false = ignore silently.
 async function checkIntent(geminiKey, groqKey, briefing, text) {
  const prompt = `You are a filter for a recruitment bot.
 
@@ -293,8 +303,7 @@ Respond with ONLY valid JSON, nothing else:
   try {
     let rawText = null
 
-    // Use next available free model for intent check
-    const model = await getNextFreeModel()
+    const model = await getNextFreeModel(!!groqKey)
     if (!model) {
       console.warn('WA Bot BG: No free model available for intent check — defaulting to engage')
       return true
@@ -332,15 +341,15 @@ Respond with ONLY valid JSON, nothing else:
       rawText = data.choices?.[0]?.message?.content
     }
 
-    if (!rawText) return true // fail open — if AI fails, engage anyway
+    if (!rawText) return true 
 
     const cleaned = rawText.replace(/```json|```/g, '').trim()
     const parsed = JSON.parse(cleaned)
-    return parsed.isJobRelated !== false // default true if missing
+    return parsed.isJobRelated !== false 
 
   } catch (e) {
     console.warn('WA Bot BG: Intent check failed —', e.message, '— defaulting to engage')
-    return true // fail open
+    return true 
   }
 }
 
@@ -370,7 +379,6 @@ async function persistState() {
 }
 
 // ─── INCOMING MESSAGE HANDLER ─────────────────────────────────
-// NEW
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'NEW_MESSAGE') {
     handleNewMessage(message.payload)
@@ -383,7 +391,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     delete candidateStatus[s]
     delete lastReplyPerSender[s]
     delete lastMessageTime[s]
-    // Mark as manually reset so catch-up doesn't re-engage
     chrome.storage.local.get(['catchupSkipList'], (data) => {
       const skipList = data.catchupSkipList || []
       if (!skipList.includes(s)) {
@@ -416,14 +423,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return
   }
 
-  // Dedup guard
 if (lastProcessedId[sender] === messageId) {
   console.log(`WA Bot BG: Duplicate messageId for ${sender} — skipping`)
   return
 }
 lastProcessedId[sender] = messageId
 
-  // Per-sender cooldown (8s)
   const now = Date.now()
   const lastReply = lastReplyPerSender[sender] || 0
   if (now - lastReply < 8000) {
@@ -446,7 +451,6 @@ const groqKey = profile?.groq_key
     return
   }
 
-  // ── SESSION EXPIRY ─────────────────────────────────────────
   const resetMs = 7 * 24 * 60 * 60 * 1000
   const lastTime = lastMessageTime[sender] || 0
   const isExpired = conversations[sender] && (now - lastTime > resetMs)
@@ -457,17 +461,12 @@ const groqKey = profile?.groq_key
     delete candidateStatus[sender]
   }
 
-// ── JUNK MESSAGE FILTER ────────────────────────────────────
-  // Drop messages that are pure symbols, single characters, or
-  // whitespace — these are accidental taps or UI artifacts.
-  // Numbers are allowed through because "10" is a valid answer.
   const junkPattern = /^[\s\-\/\.\,\!\?\*\_\+\=\|\\\^~`@#$%^&]+$/
   if (junkPattern.test(text.trim())) {
     console.log(`WA Bot BG: ⏭ Junk message filtered — "${text}" — ignoring`)
     return
   }
 
-  // ── INTENT CHECK (new senders only) ───────────────────────
   if (!conversations[sender]) {
     console.log(`WA Bot BG: 🆕 New sender — running intent check for ${sender}`)
 
@@ -501,10 +500,8 @@ const groqKey = profile?.groq_key
     conversations[sender] = []
   }
 
-  // Update last message timestamp
   lastMessageTime[sender] = now
 
-  // ── ALREADY REJECTED ───────────────────────────────────────
   if (candidateStatus[sender] === 'rejected') {
     console.log(`WA Bot BG: ${sender} already rejected — ignoring`)
     return
@@ -515,7 +512,6 @@ const groqKey = profile?.groq_key
 
   console.log('WA Bot BG: Calling AI...')
 
-  // ── CALL AI ────────────────────────────────────────────────
   const MAX_HISTORY = 8
   const trimmedHistory = conversations[sender].slice(-MAX_HISTORY)
 
@@ -523,7 +519,6 @@ const groqKey = profile?.groq_key
 
 if (!aiResult) {
     console.log('WA Bot BG: ❌ AI returned null — check provider logs above')
-    // If offline, queue for retry
     if (!isOnline) {
       const existing = retryQueue.find(q => q.payload.sender === sender)
       if (!existing) {
@@ -539,7 +534,6 @@ if (!aiResult) {
   console.log(`WA Bot BG: ✅ AI responded — status="${status}" | reason="${reason}"`)
   console.log(`WA Bot BG: replyMessage="${replyMessage}"`)
 
-  // ── PING OWNER ─────────────────────────────────────────────
   if (replyMessage === 'PING_OWNER' || status === 'needs_owner') {
     candidateStatus[sender] = 'needs_owner'
     await persistState()
@@ -558,7 +552,6 @@ if (!aiResult) {
     return
   }
 
-  // ── UPDATE STATUS ──────────────────────────────────────────
   if (status && status !== 'screening') {
     candidateStatus[sender] = status
 
@@ -575,7 +568,6 @@ if (!aiResult) {
     }
   }
 
-// NEW
 conversations[sender].push({ role: 'assistant', content: replyMessage })
 await persistState()
 broadcastUpdate()
@@ -591,10 +583,6 @@ lastReplyPerSender[sender] = Date.now()
   sendReplyToTab(replyMessage, sender, 0)
 }
 
-
-// ─── SEND REPLY WITH RETRY ────────────────────────────────────
-// Retries up to 3 times with 1s delay in case the content script
-// context reloaded and needs a moment to re-register its listener.
 function sendReplyToTab(replyMessage, sender, attempt) {
   chrome.tabs.query({ url: 'https://web.whatsapp.com/*' }, (tabs) => {
     if (tabs.length === 0) {
@@ -617,7 +605,6 @@ function sendReplyToTab(replyMessage, sender, attempt) {
   })
 }
 
-// ─── BROADCAST TO SIDE PANEL ──────────────────────────────────
 function broadcastUpdate() {
   const summary = buildSummary()
   chrome.storage.local.set({ conversations: summary })
@@ -639,14 +626,13 @@ function buildSummary() {
       role: last.role,
       status,
       needsOwner: status === 'needs_owner',
-      fullHistory: history // include full history for conversation viewer
+      fullHistory: history 
     }
   })
 }
 
-// ─── AI ROUTER ────────────────────────────────────────────────
 async function callAI(provider, geminiKey, groqKey, activeJobs, tallyLink, history) {
-  const systemPrompt = buildSystemPrompt(activeJobs) // Passes the jobs array now
+  const systemPrompt = buildSystemPrompt(activeJobs) 
   console.log(`WA Bot BG: AI router — provider="${provider}"`)
 
   if (provider === 'freetier') {
@@ -656,9 +642,8 @@ async function callAI(provider, geminiKey, groqKey, activeJobs, tallyLink, histo
   console.log('WA Bot BG: ❌ Unknown provider:', provider)
   return null
 }
-// ─── SYSTEM PROMPT ────────────────────────────────────────────
+
 function buildSystemPrompt(activeJobs) {
-  // Turn the Supabase array into a context the AI understands
   const jobsContext = activeJobs.map(job => `
      ROLE_ID: ${job.id}
       ROLE: ${job.title}
@@ -685,7 +670,7 @@ function buildSystemPrompt(activeJobs) {
          "matchedJobId" to null.
       7. Return ONLY valid JSON: {"replyMessage": "...", "status": "...", "reason": "...", "matchedJobId": "..."}`;
 }
-// ─── CLAUDE ───────────────────────────────────────────────────
+
 async function callClaude(apiKey, model, systemPrompt, history) {
   const usedModel = model || 'claude-haiku-4-5-20251001'
   console.log(`WA Bot BG: Claude request — model="${usedModel}"`)
@@ -699,8 +684,7 @@ async function callClaude(apiKey, model, systemPrompt, history) {
       },
       body: JSON.stringify({
         model: usedModel,
-       // NEW
-max_tokens: 1024,
+        max_tokens: 1024,
         system: systemPrompt,
         messages: history
       })
@@ -719,7 +703,6 @@ max_tokens: 1024,
   }
 }
 
-// ─── OPENAI ───────────────────────────────────────────────────
 async function callOpenAI(apiKey, model, systemPrompt, history) {
   const usedModel = model || 'gpt-4o-mini'
   console.log(`WA Bot BG: OpenAI request — model="${usedModel}"`)
@@ -752,10 +735,6 @@ async function callOpenAI(apiKey, model, systemPrompt, history) {
   }
 }
 
-
-// ─── FETCH WITH EXPONENTIAL BACKOFF ──────────────────────────
-// Retries on 503 (server overload) and 429 (rate limit) with
-// increasing delays: 5s → 7.5s → 11.25s (1.5x multiplier each time)
 async function fetchWithRetry(url, options, retries = 3, delay = 5000) {
   try {
     const resp = await fetch(url, options)
@@ -775,15 +754,12 @@ async function fetchWithRetry(url, options, retries = 3, delay = 5000) {
   }
 }
 
-// ─── GEMINI ───────────────────────────────────────────────────
 async function callGemini(apiKey, model, systemPrompt, history) {
-  // Use model from settings; fall back to gemini-2.0-flash
   const usedModel = (model && model.trim()) ? model.trim() : 'gemini-2.0-flash'
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${apiKey}`
 
   console.log(`WA Bot BG: Gemini request — model="${usedModel}"`)
   console.log(`WA Bot BG: Gemini URL: ${url.replace(apiKey, 'KEY_HIDDEN')}`)
-  console.log(`WA Bot BG: History length: ${history.length} turns`)
 
   try {
     const contents = history.map(m => ({
@@ -794,11 +770,10 @@ async function callGemini(apiKey, model, systemPrompt, history) {
     const body = {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
-    // NEW
-generationConfig: {
-  maxOutputTokens: 1024,
-  responseMimeType: 'application/json'
-}
+      generationConfig: {
+        maxOutputTokens: 1024,
+        responseMimeType: 'application/json'
+      }
     }
 
     const fetchOptions = {
@@ -807,17 +782,23 @@ generationConfig: {
       body: JSON.stringify(body)
     }
 
-    // Use fetchWithRetry for ALL requests — handles 503/429 from the first attempt
     console.log('WA Bot BG: Gemini sending request (with auto-retry)...')
     const resp = await fetchWithRetry(url, fetchOptions, 3, 5000)
-
     console.log('WA Bot BG: Gemini HTTP status:', resp.status, resp.statusText)
+
+    if (resp.status === 429) {
+      console.log(`WA Bot BG: ⏭ Gemini 429 (Rate Limit) — marking model "${usedModel}" as exhausted`)
+      const counters = await getModelCounters()
+      const modelDef = FREE_MODELS.find(m => m.id === usedModel)
+      if (modelDef) counters[usedModel] = modelDef.softCap
+      await chrome.storage.local.set({ modelCounters: counters })
+      return null
+    }
 
     const data = await resp.json()
 
     if (data.error) {
       console.log('WA Bot BG: ❌ Gemini API error:', JSON.stringify(data.error))
-      console.log('WA Bot BG: Error code:', data.error.code, '| Message:', data.error.message)
       return null
     }
 
@@ -836,19 +817,16 @@ generationConfig: {
   }
 }
 
-// ─── FREE TIER CALLER ─────────────────────────────────────────
 async function callFreeTier(geminiKey, groqKey, systemPrompt, history) {
-  const model = await getNextFreeModel()
+  const model = await getNextFreeModel(!!groqKey)
 
   if (!model) {
-    // All models exhausted — alert the user
     chrome.notifications.create(`limit-${Date.now()}`, {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icon.png'),
       title: '⚠️ Daily limit reached',
       message: 'All free tier models are exhausted for today. Bot paused until midnight.'
     })
-    // Broadcast limit state to panel
     chrome.runtime.sendMessage({ type: 'DAILY_LIMIT_REACHED' }).catch(() => {})
     return null
   }
@@ -860,17 +838,12 @@ async function callFreeTier(geminiKey, groqKey, systemPrompt, history) {
   }
 
   if (model.provider === 'groq') {
-    if (!groqKey) {
-      console.log('WA Bot BG: groqKey missing — falling back to Gemini')
-      return await callGemini(geminiKey, 'gemini-2.0-flash', systemPrompt, history)
-    }
     return await callGroq(groqKey, model.id, systemPrompt, history)
   }
 
   return null
 }
 
-// ─── GROQ CALLER ──────────────────────────────────────────────
 async function callGroq(apiKey, model, systemPrompt, history) {
   const usedModel = model || 'llama-3.1-8b-instant'
   console.log(`WA Bot BG: Groq request — model="${usedModel}"`)
@@ -890,19 +863,20 @@ async function callGroq(apiKey, model, systemPrompt, history) {
       })
     }, 3, 5000)
 
+    if (resp.status === 429) {
+      console.log(`WA Bot BG: ⏭ Groq 429 (Rate Limit) — marking model "${usedModel}" as exhausted`)
+      const counters = await getModelCounters()
+      const modelDef = FREE_MODELS.find(m => m.id === usedModel)
+      if (modelDef) counters[usedModel] = modelDef.softCap
+      await chrome.storage.local.set({ modelCounters: counters })
+      return null
+    }
+
     const data = await resp.json()
     console.log('WA Bot BG: Groq raw response status:', resp.status)
 
     if (data.error) {
       console.log('WA Bot BG: ❌ Groq API error:', JSON.stringify(data.error))
-      // If rate limited, mark model as exhausted and retry with next
-      if (resp.status === 429) {
-        console.log('WA Bot BG: ⏭ Groq 429 — marking exhausted and retrying')
-        const counters = await getModelCounters()
-        const modelDef = FREE_MODELS.find(m => m.id === usedModel)
-        if (modelDef) counters[usedModel] = modelDef.softCap
-        await chrome.storage.local.set({ modelCounters: counters })
-      }
       return null
     }
 
@@ -914,7 +888,6 @@ async function callGroq(apiKey, model, systemPrompt, history) {
   }
 }
 
-// ─── PARSE AI RESPONSE ────────────────────────────────────────
 function parseAIResponse(rawText) {
   try {
     const cleaned = rawText
@@ -932,14 +905,11 @@ function parseAIResponse(rawText) {
     }
   } catch (e) {
     console.warn('WA Bot BG: ⚠️ JSON parse failed. Error:', e.message, '| Raw:', rawText.substring(0, 120))
-    // If raw text looks like broken JSON (starts with { or [), NEVER send it
-    // This is what caused "{" to be delivered to the candidate
     const looksLikeBrokenJSON = rawText.trim().startsWith('{') || rawText.trim().startsWith('[')
     if (looksLikeBrokenJSON) {
       console.warn('WA Bot BG: Suppressing broken JSON — no reply sent')
       return null
     }
-    // Only use raw text if it looks like a real sentence
     return {
       replyMessage: rawText.trim(),
       status: 'screening',

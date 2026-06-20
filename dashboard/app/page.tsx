@@ -40,8 +40,13 @@ const fetchJobs = async () => {
     return;
   }
 
-  const { data: candidateRows, error: candidatesError } = await supabase
-    .from('candidates').select('job_id, status').eq('recruiter_id', user.id);
+  const jobIds = (data || []).map((job) => job.id);
+  const { data: candidateRows, error: candidatesError } = jobIds.length > 0
+    ? await supabase
+      .from('candidates')
+      .select('job_id, status')
+      .in('job_id', jobIds)
+    : { data: [], error: null };
 
   if (candidatesError) console.error("Fetch candidate stats error:", candidatesError.message);
 
@@ -99,26 +104,29 @@ const fetchJobs = async () => {
     setSettingsSaved(null);
     setSettingsError('');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setSettingsError('Unable to identify the current user.');
-      setSavingSettings(false);
-      return;
-    }
+    try {
+      const response = await fetch('/api/extension/profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          gemini_key: geminiKey.trim(),
+          groq_key: groqKey.trim(),
+        }),
+      });
 
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        gemini_key: geminiKey.trim(),
-        groq_key: groqKey.trim(),
-      }, { onConflict: 'id' });
+      const data = await response.json();
 
-    if (error) {
-      console.error('Save settings error:', error.message);
+      if (!response.ok) {
+        console.error('Save settings error:', data.error);
+        setSettingsError('Unable to save keys.');
+      } else {
+        setSettingsSaved('Keys saved successfully.');
+      }
+    } catch (error) {
+      console.error('Save settings error:', error);
       setSettingsError('Unable to save keys.');
-    } else {
-      setSettingsSaved('Keys saved successfully.');
     }
 
     setSavingSettings(false);

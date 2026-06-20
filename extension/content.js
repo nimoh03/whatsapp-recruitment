@@ -171,11 +171,42 @@ function extractMessageText(msg) {
   return null
 }
 
-function isOutgoingMessage(msg) {
+function normalizeNameForCompare(name) {
+  if (!name) return ''
+  return name.replace(/[\s\-()]/g, '').toLowerCase()
+}
+
+function getPrePlainTextSender(msg) {
+  const el = msg.querySelector('.copyable-text[data-pre-plain-text]')
+  const pre = el?.getAttribute('data-pre-plain-text')
+  if (!pre) return null
+  // Format: "[H:MM AM/PM, M/D/YYYY] SenderName: "
+  const match = pre.match(/\]\s*(.+?):\s*$/)
+  return match ? match[1].trim() : null
+}
+
+// PRIMARY: compare the message's actual sender name (from WhatsApp's own
+// pre-plain-text metadata) against the contact name of the chat we're in.
+// Same name = incoming. Different name = it's us (WhatsApp shows our own
+// profile name there instead of the contact's). Falls back to older,
+// less reliable heuristics only when pre-plain-text isn't available
+// (e.g. some media messages) or no expected name was passed in.
+function isOutgoingMessage(msg, expectedSenderName) {
+  if (expectedSenderName) {
+    const msgSender = getPrePlainTextSender(msg)
+    if (msgSender) {
+      const a = normalizeNameForCompare(msgSender)
+      const b = normalizeNameForCompare(expectedSenderName)
+      if (a && b) return a !== b
+    }
+  }
+
   const msgId = getMessageId(msg)
   if (msgId?.startsWith('true_')) return true
+  if (msgId?.startsWith('false_')) return false
   if (msg.closest('.message-out')) return true
-  if (msg.querySelector('[data-testid="msg-dblcheck"], [data-testid="msg-check"]')) return true
+  if (msg.closest('.message-in')) return false
+  if (msg.querySelector('[data-testid="msg-dblcheck"], [data-testid="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-check"], [data-icon="msg-dblcheck-ack"]')) return true
 
   const panel = document.querySelector('#main') || document.body
   if (panel) {
@@ -210,8 +241,8 @@ function getAllUnprocessedMessages(sender) {
 
   const unprocessed = []
 
-  for (const msg of containers) {
-    if (isOutgoingMessage(msg)) continue
+for (const msg of containers) {
+    if (isOutgoingMessage(msg, sender)) continue
 
     const msgId = getMessageId(msg)
     if (!msgId) continue
@@ -482,7 +513,14 @@ async function processOpenChat(lockKey) {
    // ── COLLECT ALL NEW MESSAGES ────────────────────────────
     // Get every unprocessed incoming message, not just the last one.
     // This handles candidates who send multiple messages while bot was locked.
-    const newMessages = getAllUnprocessedMessages(sender)
+    let newMessages = getAllUnprocessedMessages(sender)
+
+    // If nothing found yet, give WhatsApp's DOM a beat to finish rendering
+    // the latest bubble before we conclude it's non-text media.
+    if (newMessages.length === 0) {
+      await sleep(800)
+      newMessages = getAllUnprocessedMessages(sender)
+    }
 
     // ── HANDLE NON-TEXT MESSAGES ────────────────────────────
     if (newMessages.length === 0) {
@@ -631,9 +669,9 @@ function getLastIncomingMessage(sender) {
   ])
   console.log(`WA Bot: getLastIncomingMessage found ${containers.length} candidate containers`)
 
-  for (let i = containers.length - 1; i >= 0; i--) {
+for (let i = containers.length - 1; i >= 0; i--) {
     const msg = containers[i]
-    if (isOutgoingMessage(msg)) continue
+    if (isOutgoingMessage(msg, sender)) continue
 
     const msgId = getMessageId(msg)
     if (!msgId) continue
@@ -649,39 +687,59 @@ function getLastIncomingMessage(sender) {
 }
 
 // ─── TYPE AND SEND REPLY ──────────────────────────────────────
+function findComposeBox() {
+  return (
+    document.querySelector('div[contenteditable="true"][data-tab="10"]') ||
+    document.querySelector('[data-testid="conversation-compose-box-input"]') ||
+    document.querySelector('div[contenteditable="true"][aria-label^="Type a message"]') ||
+    document.querySelector('footer div[contenteditable="true"]')
+  )
+}
+
 function typeReply(replyText) {
   return new Promise((resolve) => {
     console.log('WA Bot: Typing reply...')
+    let attempts = 0
 
-    const inputBox =
-      document.querySelector('div[contenteditable="true"][data-tab="10"]') ||
-      document.querySelector('[data-testid="conversation-compose-box-input"]')
+    const tryType = () => {
+      const inputBox = findComposeBox()
 
-    if (!inputBox) {
-      console.log('WA Bot: ❌ Input box not found')
-      resolve()
-      return
+      if (!inputBox) {
+        attempts++
+        if (attempts < 6) {
+          console.log(`WA Bot: ⏳ Input box not found, retry ${attempts}/6...`)
+          setTimeout(tryType, 500)
+        } else {
+          console.log('WA Bot: ❌ Input box not found after retries — reply NOT sent')
+          resolve(false)
+        }
+        return
+      }
+
+      inputBox.focus()
+      document.execCommand('insertText', false, replyText)
+
+      const delay = 1000 + Math.floor(Math.random() * 1500)
+      console.log(`WA Bot: Sending reply in ${delay}ms...`)
+
+      setTimeout(() => {
+        const sendBtn =
+          document.querySelector('[data-testid="send"]') ||
+          document.querySelector('button[aria-label="Send"]')
+        if (sendBtn) {
+          sendBtn.click()
+          console.log('WA Bot: ✅ Sent via button')
+        } else {
+          inputBox.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
+          }))
+          console.log('WA Bot: ✅ Sent via Enter key')
+        }
+        resolve(true)
+      }, delay)
     }
 
-    inputBox.focus()
-    document.execCommand('insertText', false, replyText)
-
-    const delay = 1000 + Math.floor(Math.random() * 1500)
-    console.log(`WA Bot: Sending reply in ${delay}ms...`)
-
-    setTimeout(() => {
-      const sendBtn = document.querySelector('[data-testid="send"]')
-      if (sendBtn) {
-        sendBtn.click()
-        console.log('WA Bot: ✅ Sent via button')
-      } else {
-        inputBox.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
-        }))
-        console.log('WA Bot: ✅ Sent via Enter key')
-      }
-      resolve()
-    }, delay)
+    tryType()
   })
 }
 
@@ -691,8 +749,8 @@ function typeReply(replyText) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SEND_REPLY') {
     console.log('WA Bot: 📨 SEND_REPLY received — typing now')
-    typeReply(message.reply).then(() => {
-      console.log(`WA Bot: ✅ Typed reply for "${message.sender || 'unknown'}"`)
+    typeReply(message.reply).then((sent) => {
+      console.log(`WA Bot: ${sent ? '✅' : '❌'} Reply ${sent ? 'delivered' : 'FAILED'} for "${message.sender || 'unknown'}"`)
       completePendingReply(message.sender)
     })
     sendResponse({ ok: true })
@@ -720,13 +778,24 @@ let catchupRunning = false
 async function runCatchupScan(dayWindow) {
   console.log(`WA Bot: 🔍 Starting catch-up scan — ${dayWindow} day window`)
 
+  // Don't barge in on a message currently being processed/replied to.
+  let waited = 0
+  while (activeLock !== null && waited < 10000) {
+    console.log(`WA Bot: ⏳ Waiting for active lock ("${activeLock}") before catch-up...`)
+    await sleep(500)
+    waited += 500
+  }
+  if (activeLock !== null) {
+    console.warn(`WA Bot: ⚠️ Force-clearing stuck lock ("${activeLock}") before catch-up`)
+    releaseLock()
+  }
+
   const wasRunning = botRunning
   if (wasRunning) {
     clearInterval(scanInterval)
     scanInterval = null
     console.log('WA Bot: ⏸ Live scan paused for catch-up')
   }
-
   const chatList = document.querySelector('div[aria-label="Chat list"]')
   if (!chatList) {
     console.log('WA Bot: ❌ Chat list not found')
@@ -764,9 +833,10 @@ async function runCatchupScan(dayWindow) {
     const looksLikePhone = /^[+\d][\d\s\-().]{4,}$/.test(senderName)
     if (!looksLikePhone) continue
 
-    // Skip if bot already has an active conversation with this sender
-const data = await chrome.storage.local.get(['conversationHistory', 'catchupSkipList'])
-    if (data.conversationHistory?.[senderName]) continue
+  // Skip only contacts the user manually reset — let the
+    // lastIsIncoming check below decide who's truly unanswered,
+    // regardless of whether prior conversationHistory exists.
+const data = await chrome.storage.local.get(['catchupSkipList'])
     if (data.catchupSkipList?.includes(senderName)) {
       console.log(`WA Bot: ⏭ "${senderName}" — manually reset, skipping catch-up`)
       continue
@@ -810,32 +880,10 @@ const mainPanel = document.querySelector('#main') ||
       continue
     }
 
-    // Detect incoming vs outgoing by horizontal position
-    // Outgoing = right-aligned, incoming = left-aligned
-  const chatPanel = mainPanel
-    const panelWidth = chatPanel.getBoundingClientRect().width || window.innerWidth
-
-   const lastEl = allDataIds[allDataIds.length - 1]
+const lastEl = allDataIds[allDataIds.length - 1]
     const lastId = lastEl.getAttribute('data-id') || ''
 
-    // Primary check: data-id starting with "true_" = outgoing (most reliable)
-    // Secondary check: position-based (fallback)
-    // Third check: delivery tick (double checkmark = outgoing)
-    let lastIsIncoming = true
-
-    if (lastId.startsWith('true_')) {
-      lastIsIncoming = false
-    } else if (!lastId.startsWith('false_')) {
-      // No clear prefix — fall back to position
-      const lastRect = lastEl.getBoundingClientRect()
-      const panelLeft = chatPanel.getBoundingClientRect().left
-      const relativeCenterX = (lastRect.left + lastRect.width / 2) - panelLeft
-      const isRightAligned = relativeCenterX > panelWidth * 0.55
-      const hasOutgoingTick = !!lastEl.querySelector(
-        '[data-testid="msg-dblcheck"], [data-testid="msg-check"]'
-      )
-      lastIsIncoming = !isRightAligned && !hasOutgoingTick
-    }
+    const lastIsIncoming = !isOutgoingMessage(lastEl, senderName)
 console.log(`WA Bot: Last msg id="${lastId.substring(0, 20)}" lastIsIncoming=${lastIsIncoming}`)
 
     if (!lastIsIncoming) {
@@ -948,21 +996,12 @@ simulateClick(targetRow)
 
     // Double-check: if the last visible message is now outgoing, 
     // the bot already replied — skip to avoid double reply
-    const mainPanel = document.querySelector('#main') || document.body
+  const mainPanel = document.querySelector('#main') || document.body
     const allIds = Array.from(mainPanel.querySelectorAll('[data-id]'))
     if (allIds.length > 0) {
-      const lastId = allIds[allIds.length - 1].getAttribute('data-id')
-      if (lastId && lastId.startsWith('true_')) {
-        console.log(`WA Bot: ⏭ "${senderName}" — last message is outgoing, already replied — skipping`)
-        continue
-      }
-      // Also check position-based
-      const panelRect = (document.querySelector('#main') || document.body).getBoundingClientRect()
       const lastEl = allIds[allIds.length - 1]
-      const lastRect = lastEl.getBoundingClientRect()
-      const relativeCenterX = (lastRect.left + lastRect.width / 2) - panelRect.left
-      if (relativeCenterX > panelRect.width * 0.55) {
-        console.log(`WA Bot: ⏭ "${senderName}" — last message is right-aligned (outgoing) — skipping`)
+      if (isOutgoingMessage(lastEl, senderName)) {
+        console.log(`WA Bot: ⏭ "${senderName}" — last message is outgoing, already replied — skipping`)
         continue
       }
     }
